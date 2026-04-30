@@ -3,6 +3,13 @@
 > [!NOTE]
 > 本版本已根据用户反馈更新所有决策点，所有 Open Questions 已关闭。
 
+### 📑 细分设计文档
+
+| 文档 | 说明 |
+|------|------|
+| [前端设计文档](./前端设计文档.md) | 组件树、状态管理 (Zustand)、WebSocket 协议、UI 规范、Storybook 计划 |
+| [后端设计文档](./后端设计文档.md) | API 路由、ORM 模型、JWT 认证、Agent 集成、LangGraph 定义、部署配置 |
+
 ## 1. 项目背景与目标
 
 构建一个类似 ChatGPT 的 **AI-Driven Drug Discovery (AIDD) 平台**，由 Agent 驱动，面向生物、化学、医药领域。
@@ -15,7 +22,7 @@
 
 | # | 决策项 | 结论 |
 |---|--------|------|
-| 1 | **项目结构** | ✅ 新建独立项目，通过 `pip install biomni` 引用 Biomni 工具，不复制代码 |
+| 1 | **项目结构** | ✅ 新建独立项目，参考 Biomni 实现逻辑自建精简工具层，不直接依赖 biomni 包 |
 | 2 | **前端框架** | ✅ React (Vite + TS) + **Storybook** 组件开发测试 + **Playwright** E2E 测试 |
 | 3 | **用户管理** | ✅ 简单多用户（用户名+密码），无邮箱认证，仅做演示用；对话需按用户隔离 |
 | 4 | **搜索 API** | ✅ 仅使用 Biomni 已有搜索工具，暂不接入额外专业 API |
@@ -25,46 +32,22 @@
 
 ---
 
-## 3. 已有搜索工具 API 配置分析
+### 3. 已有工具抽取与精简分析
 
 > [!TIP]
-> 绝大多数 Biomni 搜索工具基于**公开免费 REST API**，无需额外 API Key，可以直接使用。
+> 我们不再直接 `pip install biomni`，而是将其中核心的搜索工具抽取出来，剥离掉冗余代码，形成**自建精简工具层 (`app/tools`)**。
 
-### 文献搜索工具 (literature.py)
+绝大多数搜索工具基于**公开免费 REST API**，无需额外 API Key。
 
-| 工具函数 | 需要 API Key? | 说明 |
-|----------|:---:|------|
-| `query_pubmed()` | ❌ | 使用 pymed 库，公开 NCBI API，直接可用 |
-| `query_arxiv()` | ❌ | 使用 arxiv 库，公开 API，直接可用 |
-| `query_scholar()` | ❌ | 使用 scholarly 库 + 免费代理，直接可用（但可能有速率限制） |
-| `search_google()` | ❌ | 使用 googlesearch-python 库，直接可用（有速率限制） |
-| `advanced_web_search_claude()` | ⚠️ **ANTHROPIC_API_KEY** | Claude Web Search，需要 Anthropic API Key |
-| `extract_url_content()` | ❌ | 纯 HTTP 请求 + BeautifulSoup，直接可用 |
-| `extract_pdf_content()` | ❌ | HTTP 下载 + PyPDF2，直接可用 |
+| 模块分类 | 核心工具函数 | 需要 API Key? | 说明 |
+|----------|----------|:---:|------|
+| **文献搜索** | `query_pubmed` | ❌ | 提取 pymed 逻辑，直接查 NCBI |
+| **文献搜索** | `query_arxiv` | ❌ | 提取 arxiv 逻辑 |
+| **通用搜索** | `search_google` | ❌ | 使用 googlesearch-python 或 Gemini Grounding |
+| **蛋白/基因** | `query_uniprot`, `query_pdb` | ⚠️ **LLM Key** | 使用 LLM 辅助构造查询参数 |
+| **药物/化学** | `query_chembl`, `query_pubchem` | ⚠️ **LLM Key** | 医药核心库，需配置好 Gemini Key |
 
-### 数据库查询工具 (database.py) — 核心 45+ 函数
-
-| 工具函数 | 需要 API Key? | 说明 |
-|----------|:---:|------|
-| `query_uniprot()` | ⚠️ **LLM Key** | 公开 API，但用 LLM 构造查询 → 需要配置好主 LLM |
-| `query_alphafold()` | ❌ | 公开 REST API，直接可用 |
-| `query_interpro()` | ⚠️ **LLM Key** | 同上，LLM 辅助查询构造 |
-| `query_pdb()` | ⚠️ **LLM Key** | 同上 |
-| `query_kegg()` | ⚠️ **LLM Key** | 同上 |
-| `query_stringdb()` | ⚠️ **LLM Key** | 同上 |
-| `query_clinvar()` | ❌ | 公开 NCBI API |
-| `query_geo()` | ❌ | 公开 NCBI API |
-| `query_ensembl()` | ⚠️ **LLM Key** | 公开 API + LLM 构造 |
-| `query_opentarget()` | ⚠️ **LLM Key** | 公开 GraphQL API + LLM 构造 |
-| `query_pubchem()` | ⚠️ **LLM Key** | 公开 API + LLM 构造 |
-| `query_chembl()` | ⚠️ **LLM Key** | 公开 API + LLM 构造 |
-| `query_clinicaltrials()` | ⚠️ **LLM Key** | 公开 API + LLM 构造 |
-| `query_openfda()` | ⚠️ **LLM Key** | 公开 API + LLM 构造 |
-| `query_iucn()` | ⚠️ **IUCN Token** | 需申请 IUCN API token |
-| `query_synapse()` | ⚠️ **可选 SYNAPSE_AUTH_TOKEN** | 公开数据不需要，私有数据需要 |
-| 其他 30+ 工具 | ❌ 或 LLM Key | 大多为公开 REST API |
-
-**结论**：只需配置好 **Gemini API Key**（作为主 LLM），所有标记 "LLM Key" 的工具自动可用。仅 `advanced_web_search_claude()` 需要额外的 Anthropic Key（可选）。
+**结论**：只需配置好 **Gemini API Key**，所有精简出来的工具即可运行。对于海量返回值的库（如 ChEMBL），需要在工具内部增加 Pydantic 硬修剪和 Map-Reduce 降维。
 
 ---
 
@@ -127,7 +110,7 @@ graph TB
         Tracer["推理追踪器 L3"]
     end
 
-    subgraph Tools["🔧 工具层 (via pip install biomni)"]
+    subgraph Tools["🔧 工具层 (自建精简版，参考 Biomni)"]
         Literature["literature.py<br/>PubMed/arXiv/Scholar"]
         Database["database.py<br/>UniProt/PDB/ChEMBL/NCBI"]
         Domain["pharmacology/genomics/...<br/>24 个领域模块"]
@@ -151,11 +134,11 @@ graph TB
     Frontend --> APIGateway
     APIGateway --> AgentCore
     AgentCore --> Tools & LLM
-    AgentCore --> Tracer
-    Tracer --> PG
+    Tracer --> MinIO
     SessionAPI --> PG
     AgentCore --> Redis
-    Frontend & APIGateway & Storage --> K3S
+    AgentCore --> MinIO
+    Frontend & APIGateway & Storage & MinIO --> K3S
 ```
 
 ---
@@ -178,8 +161,9 @@ graph TB
 |------|------|
 | 框架 | FastAPI |
 | ORM | SQLAlchemy 2.0 + Alembic |
-| 数据库 | PostgreSQL |
-| 缓存 | Redis |
+| 关系型数据库 | PostgreSQL (用户、会话元数据) |
+| 对象存储 | **MinIO / S3** (对话历史、Agent Trace 审计日志、大文件归档) |
+| 缓存 | Redis (热点上下文) |
 | 认证 | JWT（用户名+密码，简单验证） |
 
 ### Agent 核心
@@ -187,7 +171,7 @@ graph TB
 |------|------|
 | Agent 框架 | LangGraph (StateGraph) |
 | LLM | **Gemini 原生 SDK** (`google-genai`) + 本地 Qwen Fallback |
-| 工具引用 | `pip install biomni` (不复制代码) |
+| 领域工具 | **自建精简工具层**（参考 Biomni 实现逻辑，按需提取核心搜索/查询函数，去除冗余） |
 | 追踪 | 自建 Level 3 Tracer + 可选 LangFuse |
 
 ### 部署
@@ -217,40 +201,16 @@ erDiagram
         uuid user_id FK
         string title
         json metadata
+        string s3_messages_path "指向 MinIO 中的 JSONL 路径"
+        string s3_traces_prefix "指向 MinIO 中的 AgentTrace 目录"
         datetime created_at
         datetime updated_at
     }
     
-    Message {
-        uuid id PK
-        uuid session_id FK
-        enum role "user | assistant | system | tool"
-        text content
-        json metadata
-        int token_count
-        datetime created_at
-    }
-    
-    AgentTrace {
-        uuid id PK
-        uuid message_id FK
-        int step_number
-        enum step_type "think | act | observe | summarize"
-        text prompt_sent
-        text llm_response
-        json tool_call
-        json tool_result
-        int input_tokens
-        int output_tokens
-        float latency_ms
-        float cost_usd
-        datetime created_at
-    }
-    
-    User ||--o{ Session : has
-    Session ||--o{ Message : contains
-    Message ||--o{ AgentTrace : tracks
+    User ||--o{ Session : "owns"
 ```
+
+> **注意**：为了应对极高的 token 占用和追踪日志，仅在 PostgreSQL 存储轻量的元数据。庞大的对话记录 (Messages) 和子代理的运行审计日志 (AgentTrace) 直接以 JSON/JSONL 格式存储在 **MinIO (S3)** 中。
 
 > User 模型简化：仅 username + password_hash，无邮箱。Session 通过 user_id 外键实现对话隔离。
 
@@ -266,8 +226,9 @@ erDiagram
 - 多用户对话隔离
 - **产出**：能创建会话、发送消息、查看历史、切换会话、多用户隔离
 
-### Milestone 2: 接入搜索 API
-- 通过 `pip install biomni` 引入搜索工具
+### Milestone 2: 接入领域搜索工具层
+- 构建自建精简工具层 (`app/tools`)，提取 Biomni 核心逻辑
+- 实现大规模搜索结果的三层清洗降维管道 (硬修剪、重排、Map-Reduce)
 - 封装统一搜索接口层 (PubMed/arXiv/Scholar/UniProt/PDB 等)
 - 配置 Gemini API Key 使 LLM 辅助查询构造可用
 - 搜索结果卡片式前端展示
@@ -308,6 +269,7 @@ graph LR
             BE["Pod: backend<br/>FastAPI"]
             PG["Pod: postgresql"]
             RD["Pod: redis"]
+            MO["Pod: minio<br/>S3 对象存储"]
         end
         Ingress["Ingress Controller"]
     end
@@ -316,15 +278,15 @@ graph LR
     Gemini["☁️ Gemini API<br/>(云端调用)"]
     
     Ingress --> FE & BE
-    BE --> PG & RD & GPU & Gemini
+    BE --> PG & RD & MO & GPU & Gemini
 ```
 
 需要的 k3s 资源：
 - **Deployment**: frontend, backend (各 1-2 replicas)
-- **StatefulSet**: postgresql, redis
+- **StatefulSet**: postgresql, redis, minio
 - **Ingress**: Nginx/Traefik 反向代理
-- **ConfigMap/Secret**: API keys, 数据库连接
-- **PVC**: PostgreSQL 数据持久化
+- **ConfigMap/Secret**: API keys, 数据库/S3 连接配置
+- **PVC**: PostgreSQL 与 MinIO 数据持久化
 
 ---
 
@@ -343,20 +305,16 @@ aidd-platform/
 │   ├── e2e/                    # Playwright E2E 测试
 │   └── package.json
 │
-├── backend/                     # FastAPI 后端
+├── backend/                     # FastAPI + LangGraph 后端
 │   ├── app/
-│   │   ├── api/                # API 路由
+│   │   ├── api/                # API 路由 (REST + WS)
 │   │   ├── models/             # SQLAlchemy 模型
-│   │   ├── services/           # 业务逻辑
-│   │   ├── core/               # 配置 & 认证
-│   │   └── db/                 # 数据库
+│   │   ├── agent/              # LangGraph 核心, Prompts, Context 管理
+│   │   ├── tools/              # 领域工具层 (精简自 Biomni)
+│   │   ├── core/               # k3s 配置映射 (pydantic-settings)
+│   │   └── db/                 # PG/Redis/MinIO 连接
 │   ├── alembic/                # DB 迁移
-│   └── requirements.txt
-│
-├── agent/                       # Agent 核心
-│   ├── core/                   # 意图识别/任务拆解/执行
-│   ├── prompts/                # Prompt 模板
-│   └── tracing/                # L3 追踪
+│   └── environment.yml         # Mamba 统一环境依赖
 │
 ├── deploy/                      # k3s 部署
 │   ├── helm/                   # Helm Charts
