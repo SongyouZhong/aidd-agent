@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    container_name: aidd-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: aidd_user
+      POSTGRES_PASSWORD: aidd_password
+      POSTGRES_DB: aidd_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: aidd-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  seaweedfs-master:
+    image: chrislusf/seaweedfs:latest
+    container_name: aidd-seaweedfs-master
+    ports:
+      - "9333:9333"
+      - "19333:19333"
+    command: "master -ip=seaweedfs-master"
+    restart: unless-stopped
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs:latest
+    container_name: aidd-seaweedfs-volume
+    ports:
+      - "8080:8080"
+      - "18080:18080"
+    command: "volume -mserver=seaweedfs-master:9333 -port=8080"
+    volumes:
+      - seaweedfs_data:/data
+    depends_on:
+      - seaweedfs-master
+    restart: unless-stopped
+
+  seaweedfs-s3:
+    image: chrislusf/seaweedfs:latest
+    container_name: aidd-seaweedfs-s3
+    ports:
+      - "8333:8333"
+    command: "s3 -filer=seaweedfs-filer:8888"
+    depends_on:
+      - seaweedfs-filer
+    restart: unless-stopped
+
+  seaweedfs-filer:
+    image: chrislusf/seaweedfs:latest
+    container_name: aidd-seaweedfs-filer
+    ports:
+      - "8888:8888"
+      - "18888:18888"
+    command: "filer -master=seaweedfs-master:9333 -s3"
+    depends_on:
+      - seaweedfs-master
+      - seaweedfs-volume
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  seaweedfs_data:

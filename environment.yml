@@ -1,0 +1,53 @@
+name: aidd-agent
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # --- Python ---
+  - python=3.12
+
+  # --- Web Framework ---
+  - fastapi>=0.115
+  - uvicorn
+  - websockets
+  - httpx                         # 测试用 async HTTP client
+
+  # --- Database & Storage ---
+  - sqlalchemy>=2.0
+  - asyncpg
+  - alembic
+  - psycopg2                      # Alembic 同步连接
+  - redis-py
+  - aiobotocore                   # 异步 S3/SeaweedFS 客户端
+
+  # --- Auth & Validation ---
+  - pydantic-settings
+  - python-jose
+  - passlib
+  - bcrypt
+
+  # --- Agent & LLM ---
+  - langgraph
+  - langchain-core
+  - google-genai
+  - openai  # OpenAI-compatible client for local vLLM (Qwen fallback)
+
+  # --- Data Pipeline ---
+  - pydantic>=2.0
+
+  # --- Tools (Extracted from Biomni) ---
+  - bs4
+  - scholarly
+  - arxiv
+  - lxml
+  - requests
+
+  # --- Testing ---
+  - pytest
+  - pytest-asyncio
+
+  # --- pip-only packages (not available on conda-forge) ---
+  - pip
+  - pip:
+      - pymed
+      - googlesearch-python

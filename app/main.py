@@ -1,0 +1,59 @@
+"""FastAPI application entry point."""
+
+from __future__ import annotations
+
+import warnings
+from contextlib import asynccontextmanager
+
+# Suppress a spurious structlog UserWarning that fires when langgraph_api's
+# processor chain includes both format_exc_info and structlog's own exception
+# renderer.  The warning is cosmetic — exception info is still captured.
+warnings.filterwarnings(
+    "ignore",
+    message="Remove `format_exc_info` from your processor chain",
+    category=UserWarning,
+)
+
+from fastapi import FastAPI
+
+from app.api import auth as auth_router
+from app.api import sessions as sessions_router
+from app.api import targets as targets_router
+from app.core.config import settings
+from app.storage.redis_client import close_redis, get_redis
+from app.storage.s3 import s3_storage
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Eagerly init singletons so failures surface at startup, not first request.
+    await s3_storage.start()
+    await get_redis()
+    try:
+        yield
+    finally:
+        await s3_storage.stop()
+        await close_redis()
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version="0.1.0",
+        openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
+        docs_url=f"{settings.API_V1_PREFIX}/docs",
+        lifespan=lifespan,
+    )
+
+    @app.get("/health", tags=["meta"])
+    async def health() -> dict[str, str]:
+        return {"status": "ok", "env": settings.APP_ENV}
+
+    app.include_router(auth_router.router, prefix=settings.API_V1_PREFIX)
+    app.include_router(sessions_router.router, prefix=settings.API_V1_PREFIX)
+    app.include_router(targets_router.router, prefix=settings.API_V1_PREFIX)
+
+    return app
+
+
+app = create_app()
