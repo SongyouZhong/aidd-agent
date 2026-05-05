@@ -17,8 +17,12 @@ warnings.filterwarnings(
 from fastapi import FastAPI
 
 from app.api import auth as auth_router
+from app.api import chat as chat_router
+from app.api import files as files_router
+from app.api import messages as messages_router
 from app.api import sessions as sessions_router
 from app.api import targets as targets_router
+from app.api import traces as traces_router
 from app.core.config import settings
 from app.storage.redis_client import close_redis, get_redis
 from app.storage.s3 import s3_storage
@@ -51,7 +55,11 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router.router, prefix=settings.API_V1_PREFIX)
     app.include_router(sessions_router.router, prefix=settings.API_V1_PREFIX)
+    app.include_router(messages_router.router, prefix=settings.API_V1_PREFIX)
+    app.include_router(chat_router.router, prefix=settings.API_V1_PREFIX)
+    app.include_router(files_router.router, prefix=settings.API_V1_PREFIX)
     app.include_router(targets_router.router, prefix=settings.API_V1_PREFIX)
+    app.include_router(traces_router.router, prefix=settings.API_V1_PREFIX)
 
     return app
 

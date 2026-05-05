@@ -96,6 +96,14 @@ class S3Storage:
             ExpiresIn=expires_in,
         )
 
+    async def delete_object(self, key: str) -> None:
+        """Delete a single object.  Silently ignores missing keys."""
+        try:
+            await self.client.delete_object(Bucket=self.bucket, Key=key)
+        except ClientError as e:
+            if e.response["Error"]["Code"] not in {"NoSuchKey", "404"}:
+                raise
+
     # --- jsonl helpers (messages append-only log) ----------------------
 
     async def append_jsonl(self, key: str, record: dict[str, Any]) -> None:
@@ -141,3 +149,13 @@ def memory_key(session_id: str) -> str:
 
 def raw_output_key(session_id: str, tool_call_id: str) -> str:
     return f"{session_prefix(session_id)}/traces/raw_outputs/{tool_call_id}.json"
+
+
+def file_key(session_id: str, file_id: str, filename: str) -> str:
+    """S3 key for a user-uploaded file."""
+    return f"{session_prefix(session_id)}/files/{file_id}/{filename}"
+
+
+def trace_key(session_id: str, message_id: str) -> str:
+    """S3 key for a message's trace JSONL."""
+    return f"{session_prefix(session_id)}/traces/{message_id}.jsonl"

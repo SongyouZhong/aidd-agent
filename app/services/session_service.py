@@ -60,3 +60,13 @@ async def delete_session(
     session = await _get_owned(db, session_id, user_id)
     await db.delete(session)
     await db.commit()
+
+
+async def get_session(
+    db: AsyncSession, session_id: uuid.UUID, user_id: uuid.UUID
+) -> Session | None:
+    """Return session if owned by user, else None."""
+    session = await db.get(Session, session_id)
+    if session is None or session.user_id != user_id:
+        return None
+    return session

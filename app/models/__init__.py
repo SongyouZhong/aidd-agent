@@ -17,6 +17,7 @@ from app.models.pathway_drug import (  # noqa: F401
     target_pathway,
 )
 from app.models.target_report import TargetReport  # noqa: F401
+from app.models.session_file import SessionFile  # noqa: F401
 
 __all__ = [
     "User",
@@ -29,4 +30,5 @@ __all__ = [
     "DiseaseAssociation",
     "Paper",
     "TargetReport",
+    "SessionFile",
 ]

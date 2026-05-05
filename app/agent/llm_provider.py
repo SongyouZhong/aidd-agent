@@ -16,6 +16,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +48,16 @@ class AIResponse:
     raw: Any = None
 
 
+@dataclass
+class StreamChunk:
+    """A single chunk from a streaming LLM response."""
+    type: str  # "text" | "tool_call"
+    content: str = ""
+    tool_name: str = ""
+    tool_args: dict[str, Any] = field(default_factory=dict)
+    tool_call_id: str = ""
+
+
 # --- Fake provider (offline-friendly) ----------------------------------
 
 class FakeLLMProvider:
@@ -67,6 +78,21 @@ class FakeLLMProvider:
         if not self._script:
             return AIResponse(text="<answer>(no scripted response)</answer>")
         return self._script.pop(0)
+
+    async def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[Any] | None = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        resp = await self.generate(messages, tools)
+        # Fake streaming: yield entire text as one chunk.
+        if resp.text:
+            yield StreamChunk(type="text", content=resp.text)
+        for tc in resp.tool_calls:
+            yield StreamChunk(
+                type="tool_call", tool_name=tc.name,
+                tool_args=tc.args, tool_call_id=tc.id,
+            )
 
 
 # --- Gemini provider ---------------------------------------------------
@@ -235,6 +261,64 @@ class GeminiProvider:
             raw=resp,
         )
 
+    async def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[Any] | None = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Streaming variant: yields chunks as the model generates."""
+        system_text, contents = self._to_gemini_contents(messages)
+        from google.genai import types  # type: ignore
+
+        config_kwargs: dict[str, Any] = {}
+        if system_text:
+            config_kwargs["system_instruction"] = system_text
+
+        gemini_tools: list[Any] = []
+        if tools:
+            func_decls = self._langchain_tools_to_declarations(tools)
+            if func_decls:
+                gemini_tools.append(types.Tool(
+                    function_declarations=[
+                        types.FunctionDeclaration(**d) for d in func_decls
+                    ]
+                ))
+        if not gemini_tools and self.enable_grounding:
+            gemini_tools.append(types.Tool(google_search=types.GoogleSearch()))
+        if gemini_tools:
+            config_kwargs["tools"] = gemini_tools
+
+        config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
+
+        response_stream = await asyncio.to_thread(
+            lambda: list(self._client.models.generate_content_stream(
+                model=self.model,
+                contents=contents,
+                config=config,
+            ))
+        )
+
+        tc_counter = 0
+        for chunk in response_stream:
+            candidates = getattr(chunk, "candidates", None) or []
+            if not candidates:
+                continue
+            content = getattr(candidates[0], "content", None)
+            if not content:
+                continue
+            for part in getattr(content, "parts", []) or []:
+                if hasattr(part, "text") and part.text:
+                    yield StreamChunk(type="text", content=part.text)
+                if hasattr(part, "function_call") and part.function_call:
+                    fc = part.function_call
+                    tc_counter += 1
+                    yield StreamChunk(
+                        type="tool_call",
+                        tool_name=fc.name,
+                        tool_args=dict(fc.args) if fc.args else {},
+                        tool_call_id=f"call-{fc.name}-{tc_counter}",
+                    )
+
 
 # --- Qwen provider (local vLLM, OpenAI-compatible) -------------------
 
@@ -364,6 +448,63 @@ class QwenProvider:
             raw=resp,
         )
 
+    async def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[Any] | None = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Streaming variant using OpenAI-compatible SSE."""
+        oa_messages = self._to_openai_messages(messages)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": oa_messages,
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "max_tokens": 4096,
+            "stream": True,
+            "extra_body": {
+                "chat_template_kwargs": {"enable_thinking": self.enable_thinking}
+            },
+        }
+        if tools:
+            oa_tools = self._langchain_tools_to_openai(tools)
+            if oa_tools:
+                kwargs["tools"] = oa_tools
+
+        stream_resp = await self._client.chat.completions.create(**kwargs)
+
+        tc_buffer: dict[int, dict[str, Any]] = {}  # index -> {id, name, arguments}
+        async for chunk in stream_resp:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield StreamChunk(type="text", content=delta.content)
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in tc_buffer:
+                        tc_buffer[idx] = {
+                            "id": tc.id or f"call-{uuid.uuid4().hex[:8]}",
+                            "name": tc.function.name or "",
+                            "arguments": "",
+                        }
+                    if tc.function.name:
+                        tc_buffer[idx]["name"] = tc.function.name
+                    if tc.function.arguments:
+                        tc_buffer[idx]["arguments"] += tc.function.arguments
+
+        # Emit accumulated tool calls after stream ends.
+        for buf in tc_buffer.values():
+            try:
+                args = json.loads(buf["arguments"] or "{}")
+            except (TypeError, ValueError):
+                args = {}
+            yield StreamChunk(
+                type="tool_call",
+                tool_name=buf["name"],
+                tool_args=args,
+                tool_call_id=buf["id"],
+            )
+
 
 # --- Fallback wrapper (process-level circuit breaker) ----------------
 
@@ -445,6 +586,33 @@ class FallbackLLMProvider:
             )
             await self._open_circuit(self.circuit_break_seconds)
             return await self.secondary.generate(messages, tools=tools)
+
+    async def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[Any] | None = None,
+    ) -> AsyncGenerator[StreamChunk, None]:
+        """Streaming variant with fallback."""
+        if self._circuit_is_open():
+            async for chunk in self.secondary.stream(messages, tools=tools):
+                yield chunk
+            return
+
+        try:
+            # Probe primary with generate; if it works, stream from it.
+            # (Streaming errors are harder to recover from mid-stream.)
+            async for chunk in self.primary.stream(messages, tools=tools):
+                yield chunk
+        except Exception as exc:
+            if not self._is_retryable_failure(exc):
+                raise
+            logger.warning(
+                "Primary LLM stream failed (%s); falling over to secondary",
+                type(exc).__name__,
+            )
+            await self._open_circuit(self.circuit_break_seconds)
+            async for chunk in self.secondary.stream(messages, tools=tools):
+                yield chunk
 
 
 # --- Factory -----------------------------------------------------------
